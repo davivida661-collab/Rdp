@@ -18,9 +18,7 @@ jobs:
         run: Expand-Archive ngrok.zip -DestinationPath .
 
       - name: Authenticate ngrok
-        run: .\ngrok\ngrok.exe authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
-        env:
-          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+        run: .\ngrok\ngrok.exe authtoken 30CFfgNYCMxlQYOf4joeNSaxe2O_3ki51dfeZofXGWBwbZSxQ
 
       - name: Enable Terminal Services
         run: |
@@ -37,13 +35,14 @@ jobs:
       - name: Start ngrok tunnel
         run: |
           Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 10
           $ngrokProcess = Get-Process -Name ngrok -ErrorAction SilentlyContinue
           if ($ngrokProcess) {
             Write-Host "ngrok PID: $($ngrokProcess.Id)"
-            Invoke-WebRequest -Uri "http://localhost:4040/api/tunnels" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json | Select-Object -ExpandProperty tunnels | ForEach-Object {
+            $tunnels = Invoke-WebRequest -Uri "http://localhost:4040/api/tunnels" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json
+            $tunnels.tunnels | ForEach-Object {
               Write-Host "ngrok tunnel URL: $($_.public_url)"
-              Write-Host "tunnel_url=$($_.public_url)" >> $env:GITHUB_ENV
+              Add-Content -Path $env:GITHUB_ENV -Value "tunnel_url=$($_.public_url)"
             }
           } else {
             Write-Error "ngrok failed to start"
