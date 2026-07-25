@@ -52,7 +52,7 @@ jobs:
       - name: Keep job alive
         run: |
           Write-Host "RDP is ready. Connect using the ngrok tunnel URL above."
-          Write-Host "Username: davi"
+          Write-Host "Username: Davi"
           Write-Host "Password: Davi@12345601"
           while ($true) {
             Start-Sleep -Seconds 300
