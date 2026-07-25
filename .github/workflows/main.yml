@@ -18,7 +18,7 @@ jobs:
         run: Expand-Archive ngrok.zip -DestinationPath .
 
       - name: Authenticate ngrok
-        run: .\ngrok\ngrok.exe authtoken 30CFfgNYCMxlQYOf4joeNSaxe2O_3ki51dfeZofXGWBwbZSxQ
+        run: .\ngrok.exe authtoken 30CFfgNYCMxlQYOf4joeNSaxe2O_3ki51dfeZofXGWBwbZSxQ
 
       - name: Enable Terminal Services
         run: |
@@ -34,7 +34,7 @@ jobs:
 
       - name: Start ngrok tunnel
         run: |
-          Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
+          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
           Start-Sleep -Seconds 10
           $ngrokProcess = Get-Process -Name ngrok -ErrorAction SilentlyContinue
           if ($ngrokProcess) {
