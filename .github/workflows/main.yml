@@ -3,54 +3,59 @@ name: CI
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  setup_rdp:
     runs-on: windows-latest
-    timeout-minutes: 0 # Prevent job from timing out
+    timeout-minutes: 60
 
     steps:
-    - name: Download ngrok
-      run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-    - name: Extract ngrok
-      run: Expand-Archive ngrok.zip
-    - name: Authenticate ngrok
-      run: .\ngrok\ngrok.exe authtoken $Env:NGROK_AUTH_TOKEN
-      env:
-        NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
-    - name: Enable Terminal Services
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -name "fDenyTSConnections" -Value 0
-    - name: Enable Remote Desktop Firewall Rule
-      run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-    - name: Set RDP User Authentication
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-    - name: Create Local User 'runneradmin'
-      run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "P@ssw0rd!" -Force)
-    - name: Create ngrok_with_reload.ps1 script
-      shell: powershell
-      run: |
-        $scriptContent = @'
-        function Send-GraphicsReloadKey {
-            # This command attempts to simulate Ctrl+Shift+Win+B.
-            # In a headless GitHub Actions environment, direct keystroke simulation is complex.
-            # This is a placeholder and might require a more advanced solution for actual effect.
-            # For example, using devcon.exe or restarting the display driver service.
-            Write-Host "Simulating Ctrl+Shift+Win+B (Graphics Driver Reload)"
-            # [System.Windows.Forms.SendKeys]::SendWait("^+{HOME}") # This often requires an active UI session
-            # As an alternative, we can log the action, as direct simulation is unlikely to work in headless CI.
-        }
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-        # Start ngrok in the background
-        Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow -PassThru | Out-Null
+      - name: Download ngrok
+        run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
 
-        Write-Host "ngrok tunnel started in background."
+      - name: Extract ngrok
+        run: Expand-Archive ngrok.zip -DestinationPath .
 
-        # Loop to send keystrokes every 5 minutes
-        while ($true) {
-            Start-Sleep -Seconds 300 # 5 minutes
-            Send-GraphicsReloadKey
-            Write-Host "Waiting for 5 minutes before next graphics reload simulation..."
-        }
-        '@
-        Set-Content -Path "ngrok_with_reload.ps1" -Value $scriptContent
-    - name: Start ngrok tunnel and graphics reload loop
-      run: powershell -File ngrok_with_reload.ps1
-      
+      - name: Authenticate ngrok
+        run: .\ngrok\ngrok.exe authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+        env:
+          NGROK_AUTH_TOKEN: ${{ secrets.NGROK_AUTH_TOKEN }}
+
+      - name: Enable Terminal Services
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+
+      - name: Create Local User 'davi'
+        run: |
+          $securePassword = ConvertTo-SecureString "123456d" -AsPlainText -Force
+          New-LocalUser -Name "davi" -Password $securePassword -FullName "Davi" -Description "GitHub Actions User"
+          Add-LocalGroupMember -Group "Administrators" -Member "davi"
+
+      - name: Start ngrok tunnel
+        run: |
+          Start-Process -FilePath ".\ngrok\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
+          Start-Sleep -Seconds 5
+          $ngrokProcess = Get-Process -Name ngrok -ErrorAction SilentlyContinue
+          if ($ngrokProcess) {
+            Write-Host "ngrok PID: $($ngrokProcess.Id)"
+            Invoke-WebRequest -Uri "http://localhost:4040/api/tunnels" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json | Select-Object -ExpandProperty tunnels | ForEach-Object {
+              Write-Host "ngrok tunnel URL: $($_.public_url)"
+              Write-Host "tunnel_url=$($_.public_url)" >> $env:GITHUB_ENV
+            }
+          } else {
+            Write-Error "ngrok failed to start"
+            exit 1
+          }
+
+      - name: Keep job alive
+        run: |
+          Write-Host "RDP is ready. Connect using the ngrok tunnel URL above."
+          Write-Host "Username: davi"
+          Write-Host "Password: 123456d"
+          while ($true) {
+            Start-Sleep -Seconds 300
+            Write-Host "Keeping job alive... (Ctrl+C to stop)"
+          }
