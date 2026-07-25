@@ -5,20 +5,20 @@ on: [push, workflow_dispatch]
 jobs:
   setup_rdp:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 9999
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Download ngrok
-        run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
+        run: Invoke-WebRequest https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
 
       - name: Extract ngrok
-        run: Expand-Archive ngrok.zip -DestinationPath .
+        run: Expand-Archive ngrok.zip
 
       - name: Authenticate ngrok
-        run: .\ngrok.exe authtoken 30CFfgNYCMxlQYOf4joeNSaxe2O_3ki51dfeZofXGWBwbZSxQ
+        run: .\ngrok\ngrok.exe authtoken 30CFfgNYCMxlQYOf4joeNSaxe2O_3ki51dfeZofXGWBwbZSxQ
 
       - name: Enable Terminal Services
         run: |
@@ -26,43 +26,21 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
-      - name: Disable Password Complexity Policy
+      - name: Disable password complexity and create user davi
         run: |
+          # Desabilitar política de complexidade de senha
           secedit /export /cfg c:\secpol.cfg
           (Get-Content C:\secpol.cfg).replace("PasswordComplexity = 1", "PasswordComplexity = 0") | Set-Content C:\secpol.cfg
           secedit /configure /db c:\windows\security\local.sdb /cfg c:\secpol.cfg /areas SECURITYPOLICY
           Remove-Item -Force c:\secpol.cfg -Confirm:$false
-          Write-Host "Password complexity policy disabled."
-
-      - name: Create Local User 'davi'
-        run: |
-          $securePassword = ConvertTo-SecureString "Davi@12345601" -AsPlainText -Force
-          New-LocalUser -Name "davi" -Password $securePassword -FullName "Davi" -Description "GitHub Actions User"
+          
+          # Criar usuário davi
+          $pass = ConvertTo-SecureString "Davi@12345601" -AsPlainText -Force
+          New-LocalUser -Name "davi" -Password $pass -FullName "Davi" -Description "RDP User"
           Add-LocalGroupMember -Group "Administrators" -Member "davi"
+          
+          # Verificar se foi criado
+          Get-LocalUser -Name "davi"
 
-      - name: Start ngrok tunnel
-        run: |
-          Start-Process -FilePath ".\ngrok.exe" -ArgumentList "tcp 3389" -NoNewWindow
-          Start-Sleep -Seconds 10
-          $ngrokProcess = Get-Process -Name ngrok -ErrorAction SilentlyContinue
-          if ($ngrokProcess) {
-            Write-Host "ngrok PID: $($ngrokProcess.Id)"
-            $tunnels = Invoke-WebRequest -Uri "http://localhost:4040/api/tunnels" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json
-            $tunnels.tunnels | ForEach-Object {
-              Write-Host "ngrok tunnel URL: $($_.public_url)"
-              Add-Content -Path $env:GITHUB_ENV -Value "tunnel_url=$($_.public_url)"
-            }
-          } else {
-            Write-Error "ngrok failed to start"
-            exit 1
-          }
-
-      - name: Keep job alive
-        run: |
-          Write-Host "RDP is ready. Connect using the ngrok tunnel URL above."
-          Write-Host "Username: davi"
-          Write-Host "Password: Davi@12345601"
-          while ($true) {
-            Start-Sleep -Seconds 300
-            Write-Host "Keeping job alive... (Ctrl+C to stop)"
-          }
+      - name: Create Tunnel
+        run: .\ngrok\ngrok.exe tcp 3389
