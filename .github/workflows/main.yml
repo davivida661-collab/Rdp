@@ -26,6 +26,14 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
 
+      - name: Disable Password Complexity Policy
+        run: |
+          secedit /export /cfg c:\secpol.cfg
+          (Get-Content C:\secpol.cfg).replace("PasswordComplexity = 1", "PasswordComplexity = 0") | Set-Content C:\secpol.cfg
+          secedit /configure /db c:\windows\security\local.sdb /cfg c:\secpol.cfg /areas SECURITYPOLICY
+          Remove-Item -Force c:\secpol.cfg -Confirm:$false
+          Write-Host "Password complexity policy disabled."
+
       - name: Create Local User 'davi'
         run: |
           $securePassword = ConvertTo-SecureString "Davi@12345601" -AsPlainText -Force
@@ -52,7 +60,7 @@ jobs:
       - name: Keep job alive
         run: |
           Write-Host "RDP is ready. Connect using the ngrok tunnel URL above."
-          Write-Host "Username: Davi"
+          Write-Host "Username: davi"
           Write-Host "Password: Davi@12345601"
           while ($true) {
             Start-Sleep -Seconds 300
