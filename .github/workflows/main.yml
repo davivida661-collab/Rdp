@@ -11,14 +11,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download ngrok
-        run: Invoke-WebRequest https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip -OutFile ngrok.zip
+      - name: Download ngrok v3
+        run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
 
       - name: Extract ngrok
-        run: Expand-Archive ngrok.zip
+        run: Expand-Archive ngrok.zip -DestinationPath .
 
       - name: Authenticate ngrok
-        run: .\ngrok\ngrok.exe authtoken 30CFfgNYCMxlQYOf4joeNSaxe2O_3ki51dfeZofXGWBwbZSxQ
+        run: .\ngrok.exe authtoken 30CFfgNYCMxlQYOf4joeNSaxe2O_3ki51dfeZofXGWBwbZSxQ
 
       - name: Enable Terminal Services
         run: |
@@ -28,19 +28,16 @@ jobs:
 
       - name: Disable password complexity and create user davi
         run: |
-          # Desabilitar política de complexidade de senha
           secedit /export /cfg c:\secpol.cfg
           (Get-Content C:\secpol.cfg).replace("PasswordComplexity = 1", "PasswordComplexity = 0") | Set-Content C:\secpol.cfg
           secedit /configure /db c:\windows\security\local.sdb /cfg c:\secpol.cfg /areas SECURITYPOLICY
           Remove-Item -Force c:\secpol.cfg -Confirm:$false
           
-          # Criar usuário davi
           $pass = ConvertTo-SecureString "Davi@12345601" -AsPlainText -Force
           New-LocalUser -Name "davi" -Password $pass -FullName "Davi" -Description "RDP User"
           Add-LocalGroupMember -Group "Administrators" -Member "davi"
           
-          # Verificar se foi criado
           Get-LocalUser -Name "davi"
 
       - name: Create Tunnel
-        run: .\ngrok\ngrok.exe tcp 3389
+        run: .\ngrok.exe tcp 3389
