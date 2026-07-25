@@ -28,7 +28,7 @@ jobs:
 
       - name: Create Local User 'davi'
         run: |
-          $securePassword = ConvertTo-SecureString "123456d" -AsPlainText -Force
+          $securePassword = ConvertTo-SecureString "Davi@12345601" -AsPlainText -Force
           New-LocalUser -Name "davi" -Password $securePassword -FullName "Davi" -Description "GitHub Actions User"
           Add-LocalGroupMember -Group "Administrators" -Member "davi"
 
@@ -53,7 +53,7 @@ jobs:
         run: |
           Write-Host "RDP is ready. Connect using the ngrok tunnel URL above."
           Write-Host "Username: davi"
-          Write-Host "Password: 123456d"
+          Write-Host "Password: Davi@12345601"
           while ($true) {
             Start-Sleep -Seconds 300
             Write-Host "Keeping job alive... (Ctrl+C to stop)"
