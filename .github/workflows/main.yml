@@ -8,29 +8,26 @@ permissions:
   contents: read
 
 jobs:
-  windows:
-    name: Instalar e testar AnyDesk
-    runs-on: windows-2025
+  build:
+    name: Instalar e configurar AnyDesk
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 360
 
-    env:
-      ANYDESK_PASSWORD: ${{ secrets.ANYDESK_PASSWORD }}
-
     steps:
-      - name: Preparar ambiente
+      - name: Verificar Windows
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          Write-Host "Windows:"
+          Write-Host "=== SISTEMA ==="
           Get-ComputerInfo |
             Select-Object WindowsProductName, WindowsVersion
 
-          Write-Host "CPU:"
+          Write-Host "=== PROCESSADOR ==="
           Get-CimInstance Win32_Processor |
             Select-Object Name, NumberOfCores
 
-          Write-Host "Memoria:"
+          Write-Host "=== MEMORIA ==="
           Get-CimInstance Win32_ComputerSystem |
             Select-Object TotalPhysicalMemory
 
@@ -47,8 +44,7 @@ jobs:
 
           $paths = @(
             "${env:ProgramFiles(x86)}\AnyDesk\AnyDesk.exe",
-            "$env:ProgramFiles\AnyDesk\AnyDesk.exe",
-            "$env:ChocolateyInstall\lib\anydesk.install\tools\AnyDesk.exe"
+            "$env:ProgramFiles\AnyDesk\AnyDesk.exe"
           )
 
           $exe = $paths |
@@ -60,143 +56,90 @@ jobs:
           }
 
           "ANYDESK_EXE=$exe" |
-            Out-File -FilePath $env:GITHUB_ENV -Append
+            Out-File $env:GITHUB_ENV -Append
 
           Write-Host "AnyDesk instalado:"
           Write-Host $exe
 
           & $exe --version
 
-      - name: Iniciar serviço e configurar senha
+      - name: Configurar acesso remoto
         shell: pwsh
+        env:
+          ANYDESK_PASSWORD: ${{ secrets.ANYDESK_PASSWORD }}
         run: |
           $ErrorActionPreference = "Stop"
 
           $exe = $env:ANYDESK_EXE
 
           if ([string]::IsNullOrWhiteSpace($env:ANYDESK_PASSWORD)) {
-            throw "Configure o secret ANYDESK_PASSWORD."
+            throw "Secret ANYDESK_PASSWORD nao configurado."
           }
 
           if ($env:ANYDESK_PASSWORD.Length -lt 12) {
-            throw "Use uma senha com pelo menos 12 caracteres."
+            throw "A senha precisa ter pelo menos 12 caracteres."
           }
 
-          # Inicia o serviço do AnyDesk
+          Write-Host "Iniciando servico AnyDesk..."
+
           & $exe --start
           Start-Sleep -Seconds 10
 
-          # Configura a senha de acesso não supervisionado
+          Write-Host "Configurando acesso nao supervisionado..."
+
           $env:ANYDESK_PASSWORD |
             & $exe --set-password _unattended_access
 
           if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao configurar a senha do AnyDesk."
+            throw "Falha ao configurar senha."
           }
 
-          Write-Host "Senha configurada sem exibir seu conteúdo."
+          Write-Host "Senha configurada com sucesso."
 
-          # Inicia o cliente
-          Start-Process -FilePath $exe
-          Start-Sleep -Seconds 15
+          Start-Sleep -Seconds 5
 
-      - name: Obter ID do AnyDesk
+          $id = (& $exe --get-id | Out-String).Trim()
+
+          if ([string]::IsNullOrWhiteSpace($id)) {
+            throw "Nao foi possivel obter o ID do AnyDesk."
+          }
+
+          Write-Host "=============================="
+          Write-Host "ANYDESK ID: $id"
+          Write-Host "SENHA: configurada"
+          Write-Host "=============================="
+
+      - name: Verificar conexao
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
           $exe = $env:ANYDESK_EXE
 
-          $id = (& $exe --get-id 2>&1 |
-            Out-String).Trim()
+          Write-Host "Versao:"
+          & $exe --version
 
-          if ([string]::IsNullOrWhiteSpace($id)) {
-            throw "Nao foi possivel obter o ID do AnyDesk."
-          }
+          Write-Host "Status:"
+          & $exe --get-status
 
-          "ANYDESK_ID=$id" |
-            Out-File -FilePath $env:GITHUB_ENV -Append
-
-          Write-Host "================================"
-          Write-Host " ID DO ANYDESK: $id"
-          Write-Host " SENHA: configurada no GitHub Secret"
-          Write-Host "================================"
-
-      - name: Diagnóstico de conexão
+      - name: Salvar diagnostico
+        if: always()
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Continue"
+          $log = Join-Path $env:RUNNER_TEMP "anydesk-monitor.log"
 
-          Write-Host "Processos AnyDesk:"
-          Get-Process AnyDesk -ErrorAction SilentlyContinue |
-            Select-Object Id, ProcessName, StartTime
+          @(
+            "Diagnostico AnyDesk"
+            "Data: $(Get-Date)"
+            "Windows: $([Environment]::OSVersion.Version)"
+            "AnyDesk: $($env:ANYDESK_EXE)"
+          ) | Out-File $log
 
-          Write-Host "Status do AnyDesk:"
-          & $env:ANYDESK_EXE --get-status
-
-          Write-Host "Teste HTTPS:"
-          Test-NetConnection www.google.com -Port 443 |
-            Select-Object ComputerName, RemotePort, TcpTestSucceeded
-
-          Write-Host "Disco:"
-          Get-PSDrive C |
-            Select-Object Used, Free
-
-      - name: Monitorar por até 330 minutos
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Continue"
-
-          $log = "$env:RUNNER_TEMP\anydesk-monitor.log"
-
-          function Write-Log($message) {
-            $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $message"
-            Add-Content -Path $log -Value $line
-            Write-Host $line
-          }
-
-          $end = (Get-Date).AddMinutes(330)
-          $lastRestart = (Get-Date).AddMinutes(-5)
-
-          while ((Get-Date) -lt $end) {
-            $proc = Get-Process AnyDesk -ErrorAction SilentlyContinue
-
-            if ($proc) {
-              Write-Log "AnyDesk em execução. PID: $($proc.Id)"
-            }
-            else {
-              Write-Log "Processo AnyDesk não encontrado."
-
-              if (((Get-Date) - $lastRestart).TotalSeconds -ge 60) {
-                Write-Log "Tentando reiniciar AnyDesk."
-                & $env:ANYDESK_EXE --start
-                Start-Process -FilePath $env:ANYDESK_EXE
-                $lastRestart = Get-Date
-              }
-            }
-
-            $cpu = Get-CimInstance Win32_Processor |
-              Measure-Object -Property LoadPercentage -Average
-
-            $ram = Get-CimInstance Win32_OperatingSystem
-
-            $usedRam = [math]::Round(
-              (($ram.TotalVisibleMemorySize - $ram.FreePhysicalMemory) /
-              $ram.TotalVisibleMemorySize) * 100, 1
-            )
-
-            Write-Log "CPU: $($cpu.Average)% | RAM: $usedRam%"
-
-            Start-Sleep -Seconds 30
-          }
-
-          Write-Log "Monitoramento finalizado."
-
-      - name: Salvar logs
+      - name: Upload diagnostico
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: anydesk-diagnostico
-          path: ${{ runner.temp }}\anydesk-monitor.log
-          if-no-files-found: ignore
+          path: ${{ runner.temp }}/anydesk-monitor.log
+          if-no-files-found: warn
           retention-days: 7
