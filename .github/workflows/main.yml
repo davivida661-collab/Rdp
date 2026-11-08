@@ -1,65 +1,192 @@
 
-name: Windows Cloud Runner - Diagnostico
+name: Windows Cloud PC - Advanced Diagnostics
 
 on:
   workflow_dispatch:
+    inputs:
+      install_anydesk:
+        description: "Instalar AnyDesk"
+        required: true
+        type: boolean
+        default: true
+
+      run_diagnostics:
+        description: "Executar diagnostico completo"
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: windows-cloud-diagnostics
+  cancel-in-progress: false
+
 jobs:
   windows:
-    name: Inicializar Windows Server 2025
+    name: Windows Server 2025
     runs-on: windows-2025
-    timeout-minutes: 15
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
-      - name: Verificar runner
-        shell: pwsh
+      - name: Inicializar ambiente
         run: |
           $ErrorActionPreference = "Stop"
 
-          Write-Host "=== RUNNER GITHUB ==="
-          Write-Host "Sistema: $env:RUNNER_OS"
-          Write-Host "Arquitetura: $env:RUNNER_ARCH"
-          Write-Host "Nome: $env:RUNNER_NAME"
+          New-Item -ItemType Directory `
+            -Path "$env:RUNNER_TEMP\cloud-report" `
+            -Force | Out-Null
 
-          Write-Host "=== WINDOWS ==="
+          Write-Host "================================"
+          Write-Host " WINDOWS CLOUD RUNNER"
+          Write-Host "================================"
+
+          Write-Host "Runner: $env:RUNNER_NAME"
+          Write-Host "OS: $env:RUNNER_OS"
+          Write-Host "Architecture: $env:RUNNER_ARCH"
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+
+          Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+
+      - name: Diagnostico do Windows
+        if: ${{ inputs.run_diagnostics }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $report = "$env:RUNNER_TEMP\cloud-report"
+
           Get-ComputerInfo |
-            Select-Object WindowsProductName, WindowsVersion
+            Select-Object WindowsProductName,
+              WindowsVersion,
+              OsArchitecture,
+              CsName |
+            Format-List |
+            Out-File "$report\windows.txt"
 
-          Write-Host "=== CPU ==="
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object Caption,
+              Version,
+              BuildNumber,
+              LastBootUpTime |
+            Format-List |
+            Out-File "$report\os.txt"
+
+          Write-Host "Windows verificado."
+
+      - name: Diagnostico de CPU
+        if: ${{ inputs.run_diagnostics }}
+        run: |
+          $report = "$env:RUNNER_TEMP\cloud-report"
+
           Get-CimInstance Win32_Processor |
-            Select-Object Name, NumberOfCores,
+            Select-Object Name,
+              Manufacturer,
+              NumberOfCores,
+              NumberOfLogicalProcessors,
+              MaxClockSpeed |
+            Format-List |
+            Out-File "$report\cpu.txt"
+
+          Get-CimInstance Win32_Processor |
+            Format-Table Name, NumberOfCores,
               NumberOfLogicalProcessors
 
-          Write-Host "=== MEMORIA ==="
-          $ram = Get-CimInstance Win32_ComputerSystem
-          Write-Host ("RAM: {0:N2} GB" -f
-            ($ram.TotalPhysicalMemory / 1GB))
-
-          Write-Host "=== DISCO ==="
-          Get-PSDrive C |
-            Select-Object Name, Used, Free
-
-      - name: Verificar Chocolatey
-        shell: pwsh
+      - name: Diagnostico de memoria
+        if: ${{ inputs.run_diagnostics }}
         run: |
-          $ErrorActionPreference = "Stop"
+          $report = "$env:RUNNER_TEMP\cloud-report"
 
-          if (Get-Command choco -ErrorAction SilentlyContinue) {
-            choco --version
-          } else {
-            Write-Host "Chocolatey nao encontrado."
+          $computer = Get-CimInstance Win32_ComputerSystem
+          $os = Get-CimInstance Win32_OperatingSystem
+
+          $total = [math]::Round(
+            $computer.TotalPhysicalMemory / 1GB, 2
+          )
+
+          $free = [math]::Round(
+            $os.FreePhysicalMemory / 1MB, 2
+          )
+
+          @"
+          Total RAM: $total GB
+          Free RAM: $free GB
+          "@ | Out-File "$report\memory.txt"
+
+          Write-Host "RAM total: $total GB"
+          Write-Host "RAM livre: $free GB"
+
+      - name: Diagnostico de armazenamento
+        if: ${{ inputs.run_diagnostics }}
+        run: |
+          $report = "$env:RUNNER_TEMP\cloud-report"
+
+          Get-CimInstance Win32_LogicalDisk |
+            Where-Object DriveType -eq 3 |
+            Select-Object DeviceID,
+              VolumeName,
+              @{N="TotalGB";E={[math]::Round($_.Size / 1GB,2)}},
+              @{N="FreeGB";E={[math]::Round($_.FreeSpace / 1GB,2)}} |
+            Format-Table |
+            Out-File "$report\disks.txt"
+
+          Write-Host "Armazenamento verificado."
+
+      - name: Diagnostico de rede
+        if: ${{ inputs.run_diagnostics }}
+        run: |
+          $report = "$env:RUNNER_TEMP\cloud-report"
+
+          Get-NetIPConfiguration |
+            Format-List |
+            Out-File "$report\network.txt"
+
+          Resolve-DnsName github.com |
+            Out-File "$report\dns.txt"
+
+          Test-NetConnection github.com -Port 443 |
+            Format-List |
+            Out-File "$report\connection.txt"
+
+          Write-Host "Rede verificada."
+
+      - name: Verificar ferramentas
+        run: |
+          $report = "$env:RUNNER_TEMP\cloud-report"
+
+          $tools = @(
+            "git",
+            "python",
+            "node",
+            "npm",
+            "choco",
+            "pwsh"
+          )
+
+          foreach ($tool in $tools) {
+            $found = Get-Command $tool `
+              -ErrorAction SilentlyContinue
+
+            if ($found) {
+              Write-Host "$tool : DISPONIVEL"
+            } else {
+              Write-Host "$tool : NAO ENCONTRADO"
+            }
           }
 
+          choco --version |
+            Out-File "$report\chocolatey.txt"
+
       - name: Instalar AnyDesk
-        shell: pwsh
+        if: ${{ inputs.install_anydesk }}
         run: |
           $ErrorActionPreference = "Stop"
 
           if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-            throw "Chocolatey nao esta disponivel."
+            throw "Chocolatey nao encontrado."
           }
 
           choco install anydesk -y --no-progress
@@ -74,31 +201,87 @@ jobs:
             Select-Object -First 1
 
           if (-not $exe) {
-            throw "Executavel AnyDesk nao encontrado."
+            throw "AnyDesk nao encontrado."
           }
 
-          Write-Host "AnyDesk instalado."
+          "ANYDESK_EXE=$exe" |
+            Out-File $env:GITHUB_ENV -Append
+
           & $exe --version
 
-      - name: Gerar diagnostico
-        if: always()
-        shell: pwsh
+          Write-Host "Instalacao concluida."
+
+      - name: Verificar AnyDesk
+        if: ${{ inputs.install_anydesk }}
         run: |
-          $path = Join-Path $env:RUNNER_TEMP "diagnostico.txt"
+          $ErrorActionPreference = "Continue"
+          $report = "$env:RUNNER_TEMP\cloud-report"
 
-          @(
-            "Diagnostico Windows"
-            "Data: $(Get-Date -Format o)"
-            "Runner: $env:RUNNER_NAME"
-            "Sistema: $env:RUNNER_OS"
-            "Arquitetura: $env:RUNNER_ARCH"
-          ) | Out-File -FilePath $path -Encoding utf8
+          $exe = $env:ANYDESK_EXE
 
-      - name: Salvar logs
+          if ($exe -and (Test-Path $exe)) {
+            & $exe --version 2>&1 |
+              Out-File "$report\anydesk-version.txt"
+
+            Get-Service |
+              Where-Object {
+                $_.Name -match "AnyDesk"
+              } |
+              Format-List |
+              Out-File "$report\anydesk-service.txt"
+          }
+
+      - name: Resumo do ambiente
+        if: always()
+        run: |
+          Write-Host "================================"
+          Write-Host " RESUMO DO RUNNER"
+          Write-Host "================================"
+
+          Write-Host "Runner: $env:RUNNER_NAME"
+          Write-Host "Sistema: $env:RUNNER_OS"
+
+          Write-Host "Data:"
+          Get-Date
+
+          Write-Host "Processos:"
+          Get-Process |
+            Sort-Object CPU -Descending |
+            Select-Object -First 10 Name, CPU |
+            Format-Table
+
+      - name: Gerar relatorio final
+        if: always()
+        run: |
+          $report = "$env:RUNNER_TEMP\cloud-report"
+
+          @"
+          WINDOWS CLOUD RUNNER
+          ====================
+
+          Data: $(Get-Date -Format o)
+          Runner: $env:RUNNER_NAME
+          OS: $env:RUNNER_OS
+          Architecture: $env:RUNNER_ARCH
+
+          Relatorios:
+          - windows.txt
+          - os.txt
+          - cpu.txt
+          - memory.txt
+          - disks.txt
+          - network.txt
+          - dns.txt
+          - connection.txt
+          - anydesk-version.txt
+
+          "@ | Out-File "$report\summary.txt"
+
+      - name: Upload dos diagnosticos
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-diagnostico
-          path: ${{ runner.temp }}/diagnostico.txt
+          name: windows-cloud-diagnostics
+          path: ${{ runner.temp }}/cloud-report/
           if-no-files-found: warn
           retention-days: 7
