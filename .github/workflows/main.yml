@@ -1,105 +1,105 @@
 
-name: Windows Cloud PC - Ultimate 25 Functions
+name: Windows Cloud PC - Automation Tests
 
 on:
   workflow_dispatch:
-    inputs:
-      monitor_interval:
-        description: "Intervalo de monitoramento em segundos"
-        required: true
-        default: "10"
-        type: choice
-        options:
-          - "10"
-          - "15"
-          - "30"
-          - "60"
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-cloud-pc-ultimate
+  group: windows-cloud-pc-tests
   cancel-in-progress: false
 
 jobs:
-  cloud-pc:
-    name: Windows Cloud PC - Ultimate System
-    runs-on: windows-latest
+  build:
+    name: Windows Server 2025 - Diagnostic System
+    runs-on: windows-2025
     timeout-minutes: 360
-
-    env:
-      MONITOR_INTERVAL: ${{ inputs.monitor_interval }}
-      PYTHONUNBUFFERED: "1"
 
     defaults:
       run:
         shell: pwsh
 
     steps:
-
-      # 01 - Inicializacao
-      - name: "01 - Initialize System"
+      - name: "01 - Initialize"
         run: |
           $ErrorActionPreference = "Stop"
 
           New-Item -ItemType Directory -Force logs | Out-Null
 
-          Write-Host "WINDOWS CLOUD PC ULTIMATE"
-          Write-Host "Inicio: $(Get-Date)"
+          "Started: $(Get-Date -Format o)" |
+            Out-File logs/status.txt -Append
 
-          "Sistema iniciado: $(Get-Date -Format o)" |
-            Out-File logs/statuslog.txt -Append
+          Write-Host "Windows Cloud PC iniciado."
 
-      # 02 - Download
-      - name: "02 - Download Resources"
+      - name: "02 - Install AnyDesk"
         run: |
-          $url = "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1"
+          $ErrorActionPreference = "Stop"
 
-          $ok = $false
+          if (-not (Get-Command choco.exe -ErrorAction SilentlyContinue)) {
+            throw "Chocolatey nao encontrado."
+          }
 
-          for ($i = 1; $i -le 3; $i++) {
-            try {
-              Invoke-WebRequest `
-                -Uri $url `
-                -OutFile Downloads.bat `
-                -TimeoutSec 60
+          choco install anydesk -y --no-progress
 
-              if ((Test-Path Downloads.bat) -and
-                  (Get-Item Downloads.bat).Length -gt 0) {
-                $ok = $true
-                break
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha na instalacao do AnyDesk."
+          }
+
+      - name: "03 - Locate AnyDesk"
+        id: locate
+        run: |
+          $paths = @(
+            "${env:ProgramFiles(x86)}\AnyDesk\AnyDesk.exe",
+            "$env:ProgramFiles\AnyDesk\AnyDesk.exe",
+            "$env:ChocolateyInstall\lib\anydesk.install\tools\AnyDesk.exe"
+          )
+
+          $exe = $paths |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+
+          if (-not $exe) {
+            throw "Executavel AnyDesk nao encontrado."
+          }
+
+          "ANYDESK_EXE=$exe" |
+            Out-File $env:GITHUB_ENV -Append
+
+          Write-Host "Executavel: $exe"
+
+      - name: "04 - Start AnyDesk"
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $exe = $env:ANYDESK_EXE
+
+          $process = Get-Process AnyDesk `
+            -ErrorAction SilentlyContinue
+
+          if (-not $process) {
+            Start-Process -FilePath $exe
+            Start-Sleep -Seconds 10
+          }
+
+          $process = Get-Process AnyDesk `
+            -ErrorAction SilentlyContinue
+
+          if ($process) {
+            foreach ($p in $process) {
+              try {
+                $p.PriorityClass = "High"
+              } catch {
+                Write-Warning "Prioridade nao alterada."
               }
             }
-            catch {
-              Write-Warning $_.Exception.Message
-              Start-Sleep 5
-            }
+
+            Write-Host "AnyDesk iniciado."
+          } else {
+            Write-Warning "AnyDesk nao iniciou."
           }
 
-          if (-not $ok) {
-            throw "Download falhou."
-          }
-
-      # 03 - Executar instalador
-      - name: "03 - Execute Downloads"
-        run: |
-          $p = Start-Process $env:ComSpec `
-            -ArgumentList "/d /c Downloads.bat" `
-            -Wait -PassThru
-
-          if ($p.ExitCode -ne 0) {
-            throw "Downloads.bat falhou: $($p.ExitCode)"
-          }
-
-      # 04 - Verificar inicializador
-      - name: "04 - Check Start Script"
-        run: |
-          if (-not (Test-Path start.bat)) {
-            throw "start.bat nao encontrado."
-          }
-
-      # 05 - Diagnostico completo
       - name: "05 - System Diagnostics"
         run: |
           $os = Get-CimInstance Win32_OperatingSystem
@@ -108,158 +108,71 @@ jobs:
 
           Write-Host "Windows: $($os.Caption)"
           Write-Host "CPU: $($cpu.Name)"
-          Write-Host "RAM: $([math]::Round($os.TotalVisibleMemorySize / 1MB,2)) GB"
+          Write-Host "RAM total: $([math]::Round($os.TotalVisibleMemorySize / 1MB,2)) GB"
 
-          $gpu | ForEach-Object {
-            Write-Host "GPU: $($_.Name)"
+          foreach ($g in $gpu) {
+            Write-Host "GPU: $($g.Name)"
           }
 
-          "Diagnostico concluido: $(Get-Date -Format o)" |
-            Out-File logs/statuslog.txt -Append
+      - name: "06 - Power Configuration"
+        run: |
+          powercfg /change standby-timeout-ac 0
+          powercfg /change hibernate-timeout-ac 0
 
-      # 06 a 25 - Monitoramento
-      - name: "06-25 - Ultimate Monitoring System"
+          Write-Host "Configuracao de energia verificada."
+
+      - name: "07 - Network Diagnostics"
+        run: |
+          $targets = @(
+            "1.1.1.1",
+            "8.8.8.8"
+          )
+
+          foreach ($target in $targets) {
+            $result = Test-NetConnection `
+              -ComputerName $target `
+              -Port 443 `
+              -InformationLevel Quiet
+
+            Write-Host "$target HTTPS: $result"
+          }
+
+      - name: "08 - Monitor System"
         run: |
           $ErrorActionPreference = "Continue"
+
+          $start = Get-Date
+          $end = $start.AddMinutes(330)
+          $lastReport = Get-Date
 
           function Log($message) {
             $line = "$(Get-Date -Format o) | $message"
             Write-Host $line
-            $line | Out-File logs/monitoramento.txt -Append -Encoding utf8
+            $line | Out-File logs/monitor.txt -Append -Encoding utf8
           }
 
-          # 01. AnyDesk AutoStart
-          function Start-AnyDesk {
-            Log "Iniciando AnyDesk"
+          while ((Get-Date) -lt $end) {
 
-            Start-Process $env:ComSpec `
-              -ArgumentList "/d /c start.bat" `
-              -WorkingDirectory $env:GITHUB_WORKSPACE
-
-            Start-Sleep -Seconds 15
-
-            $process = Get-Process AnyDesk -ErrorAction SilentlyContinue
-
-            # 02. Auto Restart / 03. Crash Detection
-            if (-not $process) {
-              Log "ALERTA: processo AnyDesk nao detectado."
-              return
-            }
-
-            # 04. High Priority
-            foreach ($p in $process) {
-              try {
-                $p.PriorityClass = "High"
-                Log "Prioridade alta aplicada."
-              }
-              catch {
-                Log "Falha ao alterar prioridade."
-              }
-            }
-          }
-
-          # 05. Power Optimization
-          try {
-            powercfg /change standby-timeout-ac 0
-            powercfg /change hibernate-timeout-ac 0
-            Log "Configuracao de energia aplicada."
-          }
-          catch {
-            Log "Configuracao de energia indisponivel."
-          }
-
-          # 06. OpenGL Support
-          $opengl = "$env:WINDIR\System32\opengl32.dll"
-
-          Log "OpenGL DLL: $(Test-Path $opengl)"
-
-          # 07. GPU Detection
-          try {
-            Get-CimInstance Win32_VideoController |
-              ForEach-Object {
-                Log "GPU: $($_.Name)"
-              }
-          }
-          catch {
-            Log "Falha ao consultar GPU."
-          }
-
-          # 08. Disk Monitor
-          # 09. Temp Cleanup
-          $tempFolder = Join-Path $env:RUNNER_TEMP "CloudPC-temp"
-
-          New-Item -ItemType Directory -Force $tempFolder |
-            Out-Null
-
-          # 10. Internet Monitor
-          # 11. Ping Monitor
-          # 12. Network Recovery (diagnostico)
-          # 13. CPU Monitor
-          # 14. RAM Monitor
-          # 15. Automatic Logs
-          # 16. Auto Recovery
-          # 17. Service Monitor
-          # 18. Startup Manager
-          # 19. Windows Update Monitor
-          # 20. Security Check
-          # 21. Uptime Counter
-          # 22. Performance Report
-          # 23. Artifact Backup
-          # 24. AnyDesk Health Check
-          # 25. Continuous Monitoring
-
-          Start-AnyDesk
-
-          $inicio = Get-Date
-          $fim = $inicio.AddMinutes(340)
-          $ultimoRelatorio = [datetime]::MinValue
-          $ultimoRestart = [datetime]::MinValue
-
-          while ((Get-Date) -lt $fim) {
-
-            $agora = Get-Date
-
-            # AnyDesk Health Check
-            $process = Get-Process AnyDesk -ErrorAction SilentlyContinue
-
-            if (-not $process -and
-                ($agora - $ultimoRestart).TotalSeconds -ge 30) {
-
-              Log "QUEDA DETECTADA - TENTANDO RECUPERAR"
-
-              "Queda: $(Get-Date -Format o)" |
-                Out-File logs/quedalog.txt -Append
-
-              Start-AnyDesk
-              $ultimoRestart = Get-Date
-            }
-
-            # CPU Monitor
-            $cpuUsage = "N/A"
-
+            # CPU
             try {
-              $counter = Get-Counter `
-                '\Processor(_Total)\% Processor Time' `
-                -ErrorAction Stop
+              $cpu = Get-Counter `
+                '\Processor(_Total)\% Processor Time'
 
-              $cpuUsage = [math]::Round(
-                $counter.CounterSamples[0].CookedValue, 1
+              $cpuValue = [math]::Round(
+                $cpu.CounterSamples[0].CookedValue, 2
               )
+            } catch {
+              $cpuValue = -1
             }
-            catch {}
 
-            # RAM Monitor
+            # RAM
             $os = Get-CimInstance Win32_OperatingSystem
-
-            $ramTotal = [math]::Round(
-              $os.TotalVisibleMemorySize / 1MB, 2
-            )
 
             $ramFree = [math]::Round(
               $os.FreePhysicalMemory / 1MB, 2
             )
 
-            # Disk Monitor
+            # Disk
             $disk = Get-CimInstance Win32_LogicalDisk `
               -Filter "DeviceID='C:'"
 
@@ -267,123 +180,55 @@ jobs:
               $disk.FreeSpace / 1GB, 2
             )
 
-            # Internet Monitor / Ping Monitor
-            $internet = Test-Connection `
-              8.8.8.8 -Count 1 -Quiet `
+            # AnyDesk process
+            $anydesk = Get-Process AnyDesk `
               -ErrorAction SilentlyContinue
 
-            # Service Monitor
-            $services = @("WinDefend", "wuauserv")
+            if (-not $anydesk) {
+              Log "AnyDesk nao esta em execucao."
 
-            foreach ($serviceName in $services) {
-              $service = Get-Service $serviceName `
-                -ErrorAction SilentlyContinue
+              # Uma tentativa de recuperacao a cada 60 segundos
+              if (((Get-Date) - $lastReport).TotalSeconds -ge 60) {
+                try {
+                  Start-Process -FilePath $env:ANYDESK_EXE
+                  Log "Tentativa de reinicializacao executada."
+                } catch {
+                  Log "Falha: $($_.Exception.Message)"
+                }
 
-              if ($service) {
-                Log "Servico $serviceName : $($service.Status)"
+                $lastReport = Get-Date
               }
             }
 
-            # Startup Manager (consulta somente)
-            if ($agora - $ultimoRelatorio -gt [timespan]::FromMinutes(5)) {
+            # Internet
+            $internet = Test-NetConnection `
+              1.1.1.1 -Port 443 `
+              -InformationLevel Quiet `
+              -WarningAction SilentlyContinue
 
-              $startup = Get-CimInstance Win32_StartupCommand `
-                -ErrorAction SilentlyContinue
+            Log "CPU=$cpuValue% RAM_LIVRE=$ramFree GB DISCO_LIVRE=$diskFree GB INTERNET=$internet"
 
-              Log "Itens de inicializacao encontrados: $(@($startup).Count)"
-
-              # Windows Update Monitor
-              $update = Get-Service wuauserv `
-                -ErrorAction SilentlyContinue
-
-              Log "Windows Update: $($update.Status)"
-
-              # Security Check
-              try {
-                $firewall = Get-NetFirewallProfile `
-                  -ErrorAction Stop
-
-                Log "Firewall perfis ativos: $(@($firewall | Where-Object Enabled).Count)"
-              }
-              catch {
-                Log "Firewall indisponivel para consulta."
-              }
-
-              # Performance Report
-              Log "CPU: $cpuUsage% | RAM livre: $ramFree GB / $ramTotal GB"
-              Log "Disco livre: $diskFree GB"
-              Log "Internet: $internet"
-
-              # Uptime Counter
-              $uptime = (Get-Date) - $inicio
-
-              Log "Uptime: $($uptime.ToString())"
-
-              # GPU Detection
-              $gpu = Get-CimInstance Win32_VideoController `
-                -ErrorAction SilentlyContinue
-
-              foreach ($g in $gpu) {
-                Log "GPU: $($g.Name)"
-              }
-
-              # Security Check - Defender
-              try {
-                $defender = Get-MpComputerStatus `
-                  -ErrorAction Stop
-
-                Log "Defender ativo: $($defender.AntivirusEnabled)"
-              }
-              catch {
-                Log "Status Defender indisponivel."
-              }
-
-              $ultimoRelatorio = Get-Date
-            }
-
-            # Network Recovery - deteccao
-            if (-not $internet) {
-              Log "ALERTA: internet indisponivel."
-            }
-
-            # Temp Cleanup - somente pasta propria
-            if (Test-Path $tempFolder) {
-              Get-ChildItem $tempFolder -Force |
-                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-            }
-
-            Start-Sleep -Seconds ([int]$env:MONITOR_INTERVAL)
+            Start-Sleep -Seconds 10
           }
 
-          Log "Monitoramento encerrado."
+          Log "Monitoramento concluido."
 
-      # Relatorio
-      - name: "Generate Final Report"
+      - name: "09 - Final Report"
         if: always()
         run: |
           "Final: $(Get-Date -Format o)" |
-            Out-File logs/statuslog.txt -Append
+            Out-File logs/status.txt -Append
 
           Get-ChildItem logs -File |
             ForEach-Object {
-              Write-Host $_.FullName
+              Write-Host $_.Name
             }
 
-      # Backup dos logs
-      - name: "Backup - Upload Reports"
+      - name: "10 - Upload Logs"
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Windows-CloudPC-Ultimate-Reports
+          name: Windows-Cloud-PC-Logs
           path: logs/
           if-no-files-found: warn
           retention-days: 7
-
-      # Limpeza
-      - name: "Final Cleanup"
-        if: always()
-        run: |
-          Remove-Item Downloads.bat,start.bat `
-            -Force -ErrorAction SilentlyContinue
-
-          Write-Host "Sistema finalizado."
