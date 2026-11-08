@@ -1,202 +1,75 @@
 
-name: Windows Cloud PC - AnyDesk Melhorado
+name: Windows Cloud - CI Avançado
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-cloud-pc
-  cancel-in-progress: false
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: Inicializando Windows Cloud
+    name: Windows Runner - Diagnóstico
     runs-on: windows-latest
-    timeout-minutes: 350
+    timeout-minutes: 30
 
     env:
+      PROCESSOR_COUNT: 8
       OPENGL: "1"
+      MEMORY_GB: 16
 
     steps:
-      - name: Inicializar ambiente
+      - name: Baixar repositório
+        uses: actions/checkout@v4
+
+      - name: Informações do sistema
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-
-          New-Item -ItemType Directory `
-            -Path "$env:RUNNER_TEMP\cloud" `
-            -Force | Out-Null
-
-          Write-Host "WINDOWS CLOUD PC"
-          Write-Host "Runner: $env:RUNNER_NAME"
-          Write-Host "Sistema: $env:RUNNER_OS"
-          Write-Host "Arquitetura: $env:RUNNER_ARCH"
-
-      - name: Diagnostico do sistema
-        shell: pwsh
-        run: |
-          $report = "$env:RUNNER_TEMP\cloud"
-
+          Write-Host "=== WINDOWS RUNNER ==="
           Get-ComputerInfo |
             Select-Object WindowsProductName,
-              WindowsVersion |
-            Out-File "$report\windows.txt"
+              WindowsVersion, OsArchitecture
 
+          Write-Host "=== CPU ==="
           Get-CimInstance Win32_Processor |
-            Select-Object Name,
-              NumberOfCores,
-              NumberOfLogicalProcessors |
-            Out-File "$report\cpu.txt"
+            Select-Object Name, NumberOfCores,
+              NumberOfLogicalProcessors
 
-          $ram = Get-CimInstance Win32_ComputerSystem
+          Write-Host "=== MEMÓRIA ==="
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object TotalVisibleMemorySize,
+              FreePhysicalMemory
 
-          "RAM total: $([math]::Round($ram.TotalPhysicalMemory / 1GB, 2)) GB" |
-            Out-File "$report\memory.txt"
-
-          Get-CimInstance Win32_LogicalDisk |
-            Where-Object DriveType -eq 3 |
-            Select-Object DeviceID,
-              Size,
-              FreeSpace |
-            Out-File "$report\disk.txt"
-
-      - name: Baixar arquivos essenciais
+      - name: Verificar ambiente
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $url = "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1"
+          Write-Host "Verificando PowerShell..."
+          $PSVersionTable
 
-          $file = "$env:RUNNER_TEMP\cloud\Downloads.bat"
+          Write-Host "Verificando espaço em disco..."
+          Get-PSDrive -PSProvider FileSystem
 
-          Invoke-WebRequest `
-            -Uri $url `
-            -OutFile $file `
-            -UseBasicParsing
+          Write-Host "Verificando conectividade..."
+          Test-NetConnection github.com -Port 443
 
-          if (-not (Test-Path $file)) {
-            throw "Download falhou."
-          }
-
-          if ((Get-Item $file).Length -eq 0) {
-            throw "Arquivo baixado esta vazio."
-          }
-
-          Get-FileHash $file -Algorithm SHA256 |
-            Format-List |
-            Out-File "$env:RUNNER_TEMP\cloud\download-hash.txt"
-
-          Write-Host "Download concluido."
-          Write-Host "Arquivo guardado para inspecao."
-
-      - name: Verificar Chocolatey
+      - name: Verificar arquivos do projeto
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
+          Write-Host "Arquivos disponíveis:"
+          Get-ChildItem -Force
 
-          if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-            throw "Chocolatey nao encontrado."
-          }
-
-          choco --version
-
-      - name: Instalar AnyDesk
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          choco install anydesk -y --no-progress
-
-          $paths = @(
-            "${env:ProgramFiles(x86)}\AnyDesk\AnyDesk.exe",
-            "$env:ProgramFiles\AnyDesk\AnyDesk.exe"
-          )
-
-          $exe = $paths |
-            Where-Object { Test-Path $_ } |
-            Select-Object -First 1
-
-          if (-not $exe) {
-            throw "AnyDesk nao encontrado."
-          }
-
-          & $exe --version |
-            Out-File "$env:RUNNER_TEMP\cloud\anydesk.txt"
-
-          Write-Host "AnyDesk instalado e verificado."
-
-      - name: Verificar conectividade
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          Test-NetConnection github.com -Port 443 |
-            Format-List |
-            Out-File "$env:RUNNER_TEMP\cloud\network.txt"
-
-          Resolve-DnsName github.com |
-            Out-File "$env:RUNNER_TEMP\cloud\dns.txt"
-
-      - name: Monitoramento limitado
-        shell: pwsh
-        run: |
-          $report = "$env:RUNNER_TEMP\cloud"
-
-          for ($i = 1; $i -le 10; $i++) {
-            Write-Host "Verificacao $i/10"
-
-            $process = Get-Process AnyDesk `
-              -ErrorAction SilentlyContinue
-
-            if ($process) {
-              Write-Host "Processo AnyDesk encontrado."
-            } else {
-              Write-Host "AnyDesk instalado, mas nao iniciado."
-            }
-
-            Start-Sleep -Seconds 30
-          }
-
-      - name: Criar relatorio
+      - name: Finalizar diagnóstico
         if: always()
         shell: pwsh
         run: |
-          $report = "$env:RUNNER_TEMP\cloud"
-
-          @"
-          WINDOWS CLOUD REPORT
-
-          Data: $(Get-Date -Format o)
-          Runner: $env:RUNNER_NAME
-          Sistema: $env:RUNNER_OS
-
-          Diagnosticos:
-          Windows
-          CPU
-          RAM
-          Disco
-          Rede
-          DNS
-          AnyDesk
-
-          "@ | Out-File "$report\summary.txt"
-
-      - name: Upload dos arquivos
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-cloud-report
-          path: ${{ runner.temp }}/cloud/
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Finalizar
-        if: always()
-        shell: pwsh
-        run: |
-          Write-Host "================================"
-          Write-Host " EXECUCAO FINALIZADA"
-          Write-Host "================================"
+          Write-Host "Diagnóstico finalizado."
+          Write-Host "Status: ${{ job.status }}"
