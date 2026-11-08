@@ -1,43 +1,88 @@
-name: CI
-
-on: [push, workflow_dispatch]
+name: Windows Cloud PC - Anydesk Agressivo 24H + Funções Extras
+on:
+  workflow_dispatch:
 
 jobs:
-  setup_rdp:
+  build:
+    name: Iniciando Sistema Reforçado 24H
     runs-on: windows-latest
-    timeout-minutes: 9999
-
+    timeout-minutes: 1440
+    env:
+      PROCESSOR_COUNT: 8
+      OPENGL: "1"
+      GITHUB_PRESERVE_WORKFLOW: true
+      MEMORY_GB: 16
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download ngrok v3
-        run: Invoke-WebRequest https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip -OutFile ngrok.zip
-
-      - name: Extract ngrok
-        run: Expand-Archive ngrok.zip -DestinationPath .
-
-      - name: Authenticate ngrok
-        run: .\ngrok.exe authtoken 30CFfgNYCMxlQYOf4joeNSaxe2O_3ki51dfeZofXGWBwbZSxQ
-
-      - name: Enable Terminal Services
+      - name: 01 Baixar + Executar Downloads.bat
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1
+          Invoke‑WebRequest -Uri "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1" -OutFile "Downloads.bat" -UseBasicParsing
+          cmd /c Downloads.bat
 
-      - name: Disable password complexity and create user davi
+      - name: 02 Verificar existência start.bat
         run: |
-          secedit /export /cfg c:\secpol.cfg
-          (Get-Content C:\secpol.cfg).replace("PasswordComplexity = 1", "PasswordComplexity = 0") | Set-Content C:\secpol.cfg
-          secedit /configure /db c:\windows\security\local.sdb /cfg c:\secpol.cfg /areas SECURITYPOLICY
-          Remove-Item -Force c:\secpol.cfg -Confirm:$false
-          
-          $pass = ConvertTo-SecureString "Davi@12345601" -AsPlainText -Force
-          New-LocalUser -Name "davi" -Password $pass -FullName "Davi" -Description "RDP User"
-          Add-LocalGroupMember -Group "Administrators" -Member "davi"
-          
-          Get-LocalUser -Name "davi"
+          if (-not (Test‑Path "start.bat")) {
+            Write‑Host "ERRO: start.bat NÃO ENCONTRADO"
+            exit 1
+          }
 
-      - name: Create Tunnel
-        run: .\ngrok.exe tcp 3389
+      - name: 03 Log de horário de início
+        run: |
+          $horaInicio = Get‑Date
+          Write‑Host "✅ Inicio do sistema: $horaInicio"
+
+      - name: 04 Configurar prioridade alta AnyDesk
+        run: |
+          $proc = Get‑Process "AnyDesk" -ErrorAction SilentlyContinue
+          if ($proc) {$proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High}
+
+      - name: 05 Desativar modo de economia energia
+        run: |
+          powercfg /change standby‑timeout‑ac 0
+          powercfg /change hibernate‑timeout‑ac 0
+
+      - name: 06 Log uso de memória
+        run: |
+          $mem = Get‑Counter "\Memory\Available MBytes"
+          Write‑Host "Memoria Disponível (MB): $($mem.CounterSamples.CookedValue)"
+
+      - name: 07 Log uso CPU
+        run: |
+          $cpu = Get‑Counter "\Processor(_Total)\% Processor Time"
+          Write‑Host "Uso CPU (%): $($cpu.CounterSamples.CookedValue)"
+
+      - name: 08 Teste de conexão internet
+        run: |
+          Test‑Connection 8.8.8.8 -Count 2
+
+      - name: 09 Gravar log em arquivo de status
+        run: |
+          "Sistema Ativo $(Get‑Date)" | Out‑File statuslog.txt -Append
+
+      - name: 10 Iniciar ANYDESK + Monitoramento A CADA 10S 24H
+        run: |
+          Write‑Host "✅ Iniciando AnyDesk"
+          cmd /c start.bat
+          Start‑Sleep -Seconds 15
+
+          $horafim = (Get‑Date).AddHours(24)
+          while ((Get‑Date) -lt $horafim) {
+            $anydesk = Get‑Process -Name "AnyDesk" -ErrorAction SilentlyContinue
+            if ((‑not $anydesk) ‑or $anydesk.HasExited) {
+              Write‑Host "🔄 QUEDA DETECTADA — REINICIANDO AnyDesk $(Get‑Date)"
+              "Queda detectada $(Get‑Date)" | Out‑File quedalog.txt -Append
+              cmd /c start.bat
+              Start‑Sleep -Seconds 15
+            }
+            Start‑Sleep -Seconds 10
+          }
+
+      - name: 11 Relatório final de logs
+        run: |
+          Write‑Host "✅ Hora final: $(Get‑Date)"
+          Get‑Content statuslog.txt,quedalog.txt -ErrorAction SilentlyContinue
+
+      - name: 12 Limpeza Completa
+        if: always()
+        run: |
+          Remove‑Item Downloads.bat,start.bat,statuslog.txt,quedalog.txt -Force -ErrorAction SilentlyContinue
+          Write‑Host "✅ Limpeza finalizada"
