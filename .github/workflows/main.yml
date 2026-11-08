@@ -14,11 +14,13 @@ jobs:
       MEMORY_GB: 16
     steps:
       - name: 01 Baixar + Executar Downloads.bat
+        shell: pwsh
         run: |
           Invoke-WebRequest -Uri "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1" -OutFile "Downloads.bat" -UseBasicParsing
           cmd /c Downloads.bat
 
       - name: 02 Verificar existência start.bat
+        shell: pwsh
         run: |
           if (-not (Test-Path "start.bat")) {
             Write-Host "ERRO: start.bat NÃO ENCONTRADO"
@@ -26,39 +28,57 @@ jobs:
           }
 
       - name: 03 Log de horário de início
+        shell: pwsh
         run: |
           $horaInicio = Get-Date
           Write-Host "✅ Inicio do sistema: $horaInicio"
 
       - name: 04 Configurar prioridade alta AnyDesk
+        shell: pwsh
         run: |
-          $proc = Get-Process "AnyDesk" -ErrorAction SilentlyContinue
-          if ($proc) {$proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High}
+          $procedimentos = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
+          if ($procedimentos) {
+            $proc = @($procedimentos)[0]
+            try {
+              $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
+              Write-Host "✅ Prioridade do AnyDesk ajustada para Alta"
+            } catch {
+              Write-Warning "Não foi possível ajustar a prioridade do AnyDesk: $($_.Exception.Message)"
+            }
+          } else {
+            Write-Host "⚠️ AnyDesk não encontrado; pulando ajuste de prioridade"
+          }
 
       - name: 05 Desativar modo de economia energia
+        shell: pwsh
         run: |
           powercfg /change standby-timeout-ac 0
           powercfg /change hibernate-timeout-ac 0
 
       - name: 06 Log uso de memória
+        shell: pwsh
         run: |
           $mem = Get-Counter "\Memory\Available MBytes"
           Write-Host "Memoria Disponível (MB): $($mem.CounterSamples.CookedValue)"
 
       - name: 07 Log uso CPU
+        shell: pwsh
         run: |
           $cpu = Get-Counter "\Processor(_Total)\% Processor Time"
           Write-Host "Uso CPU (%): $($cpu.CounterSamples.CookedValue)"
 
       - name: 08 Teste de conexão internet
+        shell: pwsh
         run: |
           Test-Connection 8.8.8.8 -Count 2
 
       - name: 09 Gravar log em arquivo de status
+        shell: pwsh
         run: |
           "Sistema Ativo $(Get-Date)" | Out-File statuslog.txt -Append
 
       - name: 10 Iniciar ANYDESK + Monitoramento A CADA 10S 24H
+        shell: pwsh
         run: |
           Write-Host "✅ Iniciando AnyDesk"
           cmd /c start.bat
@@ -67,7 +87,7 @@ jobs:
           $horafim = (Get-Date).AddHours(24)
           while ((Get-Date) -lt $horafim) {
             $anydesk = Get-Process -Name "AnyDesk" -ErrorAction SilentlyContinue
-            if ((-not $anydesk) -or $anydesk.HasExited) {
+            if (-not $anydesk) {
               Write-Host "🔄 QUEDA DETECTADA — REINICIANDO AnyDesk $(Get-Date)"
               "Queda detectada $(Get-Date)" | Out-File quedalog.txt -Append
               cmd /c start.bat
@@ -77,12 +97,14 @@ jobs:
           }
 
       - name: 11 Relatório final de logs
+        shell: pwsh
         run: |
           Write-Host "✅ Hora final: $(Get-Date)"
           Get-Content statuslog.txt,quedalog.txt -ErrorAction SilentlyContinue
 
       - name: 12 Limpeza Completa
         if: always()
+        shell: pwsh
         run: |
           Remove-Item Downloads.bat,start.bat,statuslog.txt,quedalog.txt -Force -ErrorAction SilentlyContinue
           Write-Host "✅ Limpeza finalizada"
