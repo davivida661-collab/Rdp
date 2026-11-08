@@ -1,5 +1,5 @@
 
-name: Windows Cloud PC - AnyDesk
+name: Windows Cloud Runner - Diagnostico
 
 on:
   workflow_dispatch:
@@ -8,28 +8,50 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Instalar e configurar AnyDesk
-    runs-on: [self-hosted, Windows, X64]
-    timeout-minutes: 360
+  windows:
+    name: Inicializar Windows Server 2025
+    runs-on: windows-2025
+    timeout-minutes: 15
 
     steps:
-      - name: Verificar Windows
+      - name: Verificar runner
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          Write-Host "=== SISTEMA ==="
+          Write-Host "=== RUNNER GITHUB ==="
+          Write-Host "Sistema: $env:RUNNER_OS"
+          Write-Host "Arquitetura: $env:RUNNER_ARCH"
+          Write-Host "Nome: $env:RUNNER_NAME"
+
+          Write-Host "=== WINDOWS ==="
           Get-ComputerInfo |
             Select-Object WindowsProductName, WindowsVersion
 
-          Write-Host "=== PROCESSADOR ==="
+          Write-Host "=== CPU ==="
           Get-CimInstance Win32_Processor |
-            Select-Object Name, NumberOfCores
+            Select-Object Name, NumberOfCores,
+              NumberOfLogicalProcessors
 
           Write-Host "=== MEMORIA ==="
-          Get-CimInstance Win32_ComputerSystem |
-            Select-Object TotalPhysicalMemory
+          $ram = Get-CimInstance Win32_ComputerSystem
+          Write-Host ("RAM: {0:N2} GB" -f
+            ($ram.TotalPhysicalMemory / 1GB))
+
+          Write-Host "=== DISCO ==="
+          Get-PSDrive C |
+            Select-Object Name, Used, Free
+
+      - name: Verificar Chocolatey
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if (Get-Command choco -ErrorAction SilentlyContinue) {
+            choco --version
+          } else {
+            Write-Host "Chocolatey nao encontrado."
+          }
 
       - name: Instalar AnyDesk
         shell: pwsh
@@ -37,7 +59,7 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
-            throw "Chocolatey nao encontrado."
+            throw "Chocolatey nao esta disponivel."
           }
 
           choco install anydesk -y --no-progress
@@ -52,94 +74,31 @@ jobs:
             Select-Object -First 1
 
           if (-not $exe) {
-            throw "AnyDesk.exe nao encontrado."
+            throw "Executavel AnyDesk nao encontrado."
           }
 
-          "ANYDESK_EXE=$exe" |
-            Out-File $env:GITHUB_ENV -Append
-
-          Write-Host "AnyDesk instalado:"
-          Write-Host $exe
-
+          Write-Host "AnyDesk instalado."
           & $exe --version
 
-      - name: Configurar acesso remoto
-        shell: pwsh
-        env:
-          ANYDESK_PASSWORD: ${{ secrets.ANYDESK_PASSWORD }}
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $exe = $env:ANYDESK_EXE
-
-          if ([string]::IsNullOrWhiteSpace($env:ANYDESK_PASSWORD)) {
-            throw "Secret ANYDESK_PASSWORD nao configurado."
-          }
-
-          if ($env:ANYDESK_PASSWORD.Length -lt 12) {
-            throw "A senha precisa ter pelo menos 12 caracteres."
-          }
-
-          Write-Host "Iniciando servico AnyDesk..."
-
-          & $exe --start
-          Start-Sleep -Seconds 10
-
-          Write-Host "Configurando acesso nao supervisionado..."
-
-          $env:ANYDESK_PASSWORD |
-            & $exe --set-password _unattended_access
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao configurar senha."
-          }
-
-          Write-Host "Senha configurada com sucesso."
-
-          Start-Sleep -Seconds 5
-
-          $id = (& $exe --get-id | Out-String).Trim()
-
-          if ([string]::IsNullOrWhiteSpace($id)) {
-            throw "Nao foi possivel obter o ID do AnyDesk."
-          }
-
-          Write-Host "=============================="
-          Write-Host "ANYDESK ID: $id"
-          Write-Host "SENHA: configurada"
-          Write-Host "=============================="
-
-      - name: Verificar conexao
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          $exe = $env:ANYDESK_EXE
-
-          Write-Host "Versao:"
-          & $exe --version
-
-          Write-Host "Status:"
-          & $exe --get-status
-
-      - name: Salvar diagnostico
+      - name: Gerar diagnostico
         if: always()
         shell: pwsh
         run: |
-          $log = Join-Path $env:RUNNER_TEMP "anydesk-monitor.log"
+          $path = Join-Path $env:RUNNER_TEMP "diagnostico.txt"
 
           @(
-            "Diagnostico AnyDesk"
-            "Data: $(Get-Date)"
-            "Windows: $([Environment]::OSVersion.Version)"
-            "AnyDesk: $($env:ANYDESK_EXE)"
-          ) | Out-File $log
+            "Diagnostico Windows"
+            "Data: $(Get-Date -Format o)"
+            "Runner: $env:RUNNER_NAME"
+            "Sistema: $env:RUNNER_OS"
+            "Arquitetura: $env:RUNNER_ARCH"
+          ) | Out-File -FilePath $path -Encoding utf8
 
-      - name: Upload diagnostico
+      - name: Salvar logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: anydesk-diagnostico
-          path: ${{ runner.temp }}/anydesk-monitor.log
+          name: windows-diagnostico
+          path: ${{ runner.temp }}/diagnostico.txt
           if-no-files-found: warn
           retention-days: 7
